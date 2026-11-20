@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>01 AI 강의자료 퀴즈 생성기</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- PDF / DOCX 텍스트 추출용 (선택) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<!-- PPTX / HWPX 압축 해제용 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  body { font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  .choice input:checked + span { background:#eef2ff; border-color:#6366f1; color:#3730a3; font-weight:600; }
+  .spinner { border:3px solid #e0e7ff; border-top-color:#4f46e5; border-radius:50%; width:20px; height:20px; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+<!-- 헤더 -->
+<header class="bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+  <div class="max-w-7xl mx-auto px-6 py-5 flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">📝 01 AI 강의자료 퀴즈 생성기</h1>
+      <p class="text-indigo-100 text-sm mt-1">강의 노트를 넣으면 객관식 5문항 + OX 3문항과 해설을 자동으로 만들어 줍니다.</p>
+    </div>
+    <span id="modeBadge" class="px-3 py-1 rounded-full text-xs font-semibold bg-amber-300 text-amber-900">샘플 모드 (API 키 없음)</span>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+  <!-- ================= 좌측: 입력 패널 ================= -->
+  <section class="lg:col-span-2 space-y-5">
+
+    <!-- API 설정 -->
+    <div class="bg-white rounded-2xl shadow-sm p-5">
+      <h2 class="font-bold text-lg mb-3">① API 설정 <span class="text-xs font-normal text-slate-400">(선택)</span></h2>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <select id="provider" class="border rounded-lg px-3 py-2 text-sm">
+          <option value="anthropic">Claude (Anthropic)</option>
+          <option value="openai">OpenAI (GPT)</option>
+        </select>
+        <input id="model" class="border rounded-lg px-3 py-2 text-sm" value="claude-sonnet-4-5" placeholder="모델명" />
+      </div>
+      <div class="flex gap-2">
+        <input id="apiKey" type="password" placeholder="API 키를 입력하세요 (비우면 샘플 데이터)" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <button id="toggleKey" class="px-3 rounded-lg border text-sm hover:bg-slate-50">보기</button>
+      </div>
+      <p class="text-xs text-slate-400 mt-2">🔒 키는 이 브라우저 메모리에만 있고 어디에도 저장되지 않습니다. 새로고침하면 사라집니다.</p>
+    </div>
+
+    <!-- 강의 노트 입력 -->
+    <div class="bg-white rounded-2xl shadow-sm p-5">
+      <h2 class="font-bold text-lg mb-3">② 강의 노트 입력</h2>
+      <label id="dropZone" class="flex flex-col items-center justify-center border-2 border-dashed border-indigo-200 rounded-xl py-5 cursor-pointer hover:bg-indigo-50 transition">
+        <span class="text-3xl">📂</span>
+        <span class="text-sm text-slate-600 mt-1">파일을 끌어다 놓거나 클릭해서 업로드</span>
+        <span class="text-xs text-slate-400">.pptx · .pdf · .docx · .hwpx · .txt · .md (여러 개 가능)</span>
+        <input id="fileInput" type="file" accept=".pptx,.pdf,.docx,.hwpx,.txt,.md" multiple class="hidden" />
+      </label>
+
+      <!-- 첨부된 파일 목록 -->
+      <div id="fileList" class="mt-3 space-y-2"></div>
+
+      <p class="text-xs text-slate-500 mt-4 mb-1">✏️ 텍스트 직접 입력 <span class="text-slate-400">(파일을 첨부했다면 비워 둬도 됩니다)</span></p>
+      <textarea id="lectureText" rows="9" class="w-full border rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        placeholder="강의 내용을 붙여넣거나, 파일과 함께 추가로 강조할 내용을 적으세요..."></textarea>
+      <div class="flex justify-between text-xs text-slate-400 mt-1">
+        <button id="loadExample" class="text-indigo-600 hover:underline">예시 강의 노트 불러오기</button>
+        <span id="charCount">0자</span>
+      </div>
+    </div>
+
+    <!-- 난이도 & 생성 -->
+    <div class="bg-white rounded-2xl shadow-sm p-5">
+      <h2 class="font-bold text-lg mb-3">③ 난이도 선택</h2>
+      <div id="levelGroup" class="grid grid-cols-3 gap-2">
+        <button data-level="쉬움" class="level-btn py-2 rounded-lg border text-sm">🌱 쉬움</button>
+        <button data-level="보통" class="level-btn py-2 rounded-lg border text-sm">📘 보통</button>
+        <button data-level="어려움" class="level-btn py-2 rounded-lg border text-sm">🔥 어려움</button>
+      </div>
+      <button id="generateBtn" class="w-full mt-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center justify-center gap-2 transition">
+        ✨ 퀴즈 생성하기
+      </button>
+      <p id="errorMsg" class="text-sm text-rose-600 mt-2 hidden"></p>
+    </div>
+  </section>
+
+  <!-- ================= 우측: 퀴즈 / 결과 ================= -->
+  <section class="lg:col-span-3 space-y-5">
+
+    <!-- 채점 결과창 -->
+    <div id="resultBox" class="hidden bg-white rounded-2xl shadow-sm p-6">
+      <div class="flex flex-wrap items-center gap-6">
+        <div class="relative w-28 h-28">
+          <svg viewBox="0 0 36 36" width="112" height="112" class="w-28 h-28 -rotate-90">
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e2e8f0" stroke-width="3.5"/>
+            <circle id="scoreRing" cx="18" cy="18" r="15.9" fill="none" stroke="#4f46e5" stroke-width="3.5" stroke-dasharray="0 100" stroke-linecap="round"/>
+          </svg>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <span id="scorePct" class="text-2xl font-bold">0</span><span class="text-xs text-slate-400">점</span>
+          </div>
+        </div>
+        <div class="flex-1 min-w-[200px]">
+          <h3 class="text-xl font-bold" id="scoreTitle">채점 결과</h3>
+          <p class="text-slate-500 text-sm mt-1" id="scoreDetail"></p>
+          <div class="flex gap-2 mt-3">
+            <button id="retryBtn" class="px-4 py-2 rounded-lg border text-sm hover:bg-slate-50">🔄 다시 풀기</button>
+            <button id="wrongOnlyBtn" class="px-4 py-2 rounded-lg border text-sm hover:bg-slate-50">❗ 틀린 문제만 보기</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 퀴즈 영역 -->
+    <div class="bg-white rounded-2xl shadow-sm p-6 min-h-[500px]">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-bold text-lg">④ 퀴즈 풀기</h2>
+        <span id="quizMeta" class="text-xs text-slate-400"></span>
+      </div>
+
+      <div id="emptyState" class="flex flex-col items-center justify-center text-center text-slate-400 py-24">
+        <span class="text-5xl mb-3">🎯</span>
+        <p>왼쪽에서 강의 노트를 넣고 <b class="text-indigo-600">퀴즈 생성하기</b>를 눌러 보세요.</p>
+        <p class="text-xs mt-1">API 키가 없으면 샘플 퀴즈로 동작을 확인할 수 있습니다.</p>
+      </div>
+
+      <div id="loading" class="hidden flex flex-col items-center justify-center py-24 gap-3 text-slate-500">
+        <div class="spinner"></div><p>AI가 문제를 만들고 있어요...</p>
+      </div>
+
+      <form id="quizForm" class="hidden space-y-5"></form>
+
+      <button id="submitBtn" class="hidden w-full mt-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition">
+        ✅ 제출하고 채점하기
+      </button>
+    </div>
+  </section>
+</main>
+
+<footer class="text-center text-xs text-slate-400 pb-6">Konyang University · AI 학과 교육용 도구</footer>
+
+<script>
+/* =========================================================
+   1. 상태(State)
+   ========================================================= */
+let level = "보통";          // 선택된 난이도
+let quiz = [];                // 생성된 문항 배열
+let graded = false;           // 채점 여부
+let files = [];               // 첨부 파일 [{id, name, size, ext, text, base64, status}]
+
+const $ = (id) => document.getElementById(id);
+
+/* =========================================================
+   2. 샘플 데이터 (API 키가 없을 때 사용)
+   ========================================================= */
+const EXAMPLE_NOTE = `[인공지능개론 3주차] 머신러닝의 기초
+
+1. 머신러닝이란?
+머신러닝은 명시적으로 프로그래밍하지 않아도 데이터로부터 패턴을 학습하여 예측이나 결정을 내리는 인공지능의 한 분야이다.
+
+2. 학습 방식
+- 지도학습: 정답(레이블)이 있는 데이터로 학습한다. 예) 분류, 회귀
+- 비지도학습: 정답 없이 데이터의 구조를 찾는다. 예) 군집화, 차원 축소
+- 강화학습: 에이전트가 환경과 상호작용하며 보상을 최대화하도록 학습한다.
+
+3. 과적합(Overfitting)
+학습 데이터에는 성능이 매우 좋지만 새로운 데이터에는 성능이 떨어지는 현상. 해결책으로 데이터 증강, 정규화, 드롭아웃, 조기 종료 등이 있다.
+
+4. 데이터 분할
+데이터를 학습/검증/테스트 세트로 나눈다. 테스트 세트는 최종 성능 평가에만 사용한다.
+
+5. 경사하강법
+손실 함수의 기울기 반대 방향으로 파라미터를 조금씩 이동시켜 손실을 최소화하는 최적화 방법. 학습률이 너무 크면 발산할 수 있다.`;
+
+const SAMPLE_QUIZ = [
+  { type:"mc", question:"정답(레이블)이 있는 데이터를 사용해 학습하는 방식은?",
+    options:["지도학습","비지도학습","강화학습","전이학습"], answer:0,
+    explanation:"지도학습은 입력과 정답 쌍으로 학습합니다. 분류와 회귀가 대표적인 예입니다." },
+  { type:"mc", question:"다음 중 비지도학습의 대표적인 예는?",
+    options:["스팸 메일 분류","집값 예측","고객 군집화","바둑 AI 학습"], answer:2,
+    explanation:"군집화(클러스터링)는 정답 없이 비슷한 데이터끼리 묶는 비지도학습 기법입니다." },
+  { type:"mc", question:"과적합(Overfitting)을 줄이는 방법으로 적절하지 않은 것은?",
+    options:["드롭아웃 적용","데이터 증강","조기 종료","학습 데이터 양을 줄이기"], answer:3,
+    explanation:"학습 데이터를 줄이면 모델이 일부 데이터를 외우기 쉬워져 과적합이 오히려 심해집니다." },
+  { type:"mc", question:"최종 모델의 성능 평가에만 사용해야 하는 데이터 세트는?",
+    options:["학습 세트","검증 세트","테스트 세트","증강 세트"], answer:2,
+    explanation:"테스트 세트는 학습이나 하이퍼파라미터 조정에 쓰지 않고 마지막 평가에만 사용해야 공정한 성능을 측정할 수 있습니다." },
+  { type:"mc", question:"경사하강법에서 학습률이 너무 클 때 생길 수 있는 문제는?",
+    options:["학습이 매우 느려진다","손실이 발산할 수 있다","항상 최적해에 도달한다","데이터가 부족해진다"], answer:1,
+    explanation:"학습률이 크면 최솟값을 지나쳐 왔다 갔다 하다가 손실이 오히려 커지는(발산) 문제가 생길 수 있습니다." },
+  { type:"ox", question:"강화학습은 에이전트가 보상을 최대화하도록 환경과 상호작용하며 학습한다.",
+    answer:true, explanation:"맞습니다. 강화학습의 핵심은 '행동 → 보상 → 정책 개선'의 반복입니다." },
+  { type:"ox", question:"과적합된 모델은 새로운 데이터에서도 학습 데이터만큼 높은 성능을 보인다.",
+    answer:false, explanation:"과적합은 학습 데이터에서만 성능이 좋고, 새로운 데이터에서는 성능이 떨어지는 현상입니다." },
+  { type:"ox", question:"경사하강법은 손실 함수의 기울기와 같은 방향으로 파라미터를 이동시킨다.",
+    answer:false, explanation:"기울기의 '반대' 방향으로 이동해야 손실이 줄어듭니다." }
+];
+
+/* =========================================================
+   3. 프롬프트 만들기
+   ========================================================= */
+function buildPrompt(text, level) {
+  return `당신은 대학교 교수입니다. 아래 강의 노트를 바탕으로 학생용 퀴즈를 만드세요.
+
+[조건]
+- 난이도: ${level} (쉬움=핵심 용어 확인, 보통=개념 이해, 어려움=응용·비교·추론)
+- 객관식 5문항(보기 4개), OX 3문항, 총 8문항
+- 모든 문항은 강의 노트 내용에 근거할 것
+- 각 문항에 1~2문장의 해설 포함
+- 정답 위치가 한쪽에 몰리지 않게 섞을 것
+- 반드시 아래 JSON 형식만 출력 (설명·코드블록 금지)
+
+{"questions":[
+ {"type":"mc","question":"...","options":["...","...","...","..."],"answer":0,"explanation":"..."},
+ {"type":"ox","question":"...","answer":true,"explanation":"..."}
+]}
+(answer: 객관식은 0~3 인덱스, OX는 true/false)
+
+[강의 노트]
+${text ? text.slice(0, 30000) : "(위에 첨부된 PDF 문서를 강의 노트로 사용하세요)"}`;
+}
+
+/* =========================================================
+   4. API 호출
+   ========================================================= */
+async function callAI(prompt) {
+  const provider = $("provider").value;
+  const key = $("apiKey").value.trim();
+  const model = $("model").value.trim();
+
+  if (provider === "anthropic") {
+    // PDF는 Claude에 원본 그대로 전달 → 표·그림·스캔본도 읽을 수 있음
+    const pdfBlocks = files.filter(f => f.ext === "pdf" && f.base64).map(f => ({
+      type: "document", source: { type: "base64", media_type: "application/pdf", data: f.base64 }, title: f.name
+    }));
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"   // 브라우저 직접 호출 허용
+      },
+      body: JSON.stringify({ model, max_tokens: 4000,
+        messages: [{ role: "user", content: [...pdfBlocks, { type: "text", text: prompt }] }] })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || res.statusText);
+    return data.content.map(c => c.text || "").join("");
+  } else {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "authorization": "Bearer " + key },
+      body: JSON.stringify({ model, response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }] })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || res.statusText);
+    return data.choices[0].message.content;
+  }
+}
+
+/* AI 응답 문자열 → 문항 배열 (```json 같은 군더더기 제거) */
+function parseQuiz(raw) {
+  const start = raw.indexOf("{"), end = raw.lastIndexOf("}");
+  const obj = JSON.parse(raw.slice(start, end + 1));
+  const qs = obj.questions || [];
+  const mc = qs.filter(q => q.type === "mc" && Array.isArray(q.options)).slice(0, 5);
+  const ox = qs.filter(q => q.type === "ox").map(q => ({ ...q, answer: q.answer === true || q.answer === "O" || q.answer === "true" })).slice(0, 3);
+  if (mc.length + ox.length === 0) throw new Error("문항을 해석하지 못했습니다.");
+  return [...mc, ...ox];
+}
+
+/* =========================================================
+   5. 퀴즈 생성 버튼
+   ========================================================= */
+/* 첨부 파일 + 직접 입력 텍스트를 하나로 합치기 */
+function collectSource() {
+  const useNativePdf = $("provider").value === "anthropic";
+  const parts = [];
+  files.filter(f => f.status === "ok").forEach(f => {
+    if (f.ext === "pdf" && useNativePdf && f.base64) return;   // Claude에는 PDF 원본을 따로 보냄
+    if (f.text) parts.push(`--- [파일: ${f.name}] ---\n${f.text}`);
+  });
+  const typed = $("lectureText").value.trim();
+  if (typed) parts.push(files.length ? `--- [직접 입력 메모] ---\n${typed}` : typed);
+  return parts.join("\n\n");
+}
+
+async function generate() {
+  const key = $("apiKey").value.trim();
+  hideError();
+
+  if (files.some(f => f.status === "loading")) return showError("파일을 읽는 중입니다. 잠시 후 다시 눌러 주세요.");
+  const okFiles = files.filter(f => f.status === "ok");
+  const text = collectSource();
+  const hasNativePdf = $("provider").value === "anthropic" && okFiles.some(f => f.ext === "pdf" && f.base64);
+
+  const badFiles = files.filter(f => f.status === "error");
+  if (key && !hasNativePdf && text.length < 50) {
+    if (badFiles.length)   // 원인이 '파일 읽기 실패'라면 그 이유를 그대로 알려 줌
+      return showError(`첨부한 파일을 읽지 못했습니다 → ${badFiles.map(f => `${f.name}: ${f.note}`).join(" / ")}`);
+    if (okFiles.length)
+      return showError("파일에서 추출된 글자가 너무 적습니다(50자 미만). 내용을 직접 입력하거나 PDF로 저장해 첨부해 보세요.");
+    return showError("강의 파일을 첨부하거나 강의 내용을 50자 이상 입력해 주세요.");
+  }
+
+  const srcLabel = okFiles.length ? `📎 ${okFiles.map(f => f.name).join(", ")}` : "직접 입력";
+  setView("loading");
+  try {
+    if (!key) {
+      await new Promise(r => setTimeout(r, 700));       // 샘플 모드: 살짝 기다리는 연출
+      quiz = JSON.parse(JSON.stringify(SAMPLE_QUIZ));
+      $("quizMeta").textContent = `샘플 데이터 · 난이도 ${level}` + (okFiles.length ? ` · ${srcLabel}` : "");
+    } else {
+      const raw = await callAI(buildPrompt(text, level));
+      quiz = parseQuiz(raw);
+      $("quizMeta").textContent = `${srcLabel} · ${$("model").value} · 난이도 ${level}`;
+    }
+    renderQuiz();
+  } catch (e) {
+    setView("empty");
+    showError("생성 실패: " + e.message);
+  }
+}
+
+/* =========================================================
+   6. 퀴즈 화면 그리기
+   ========================================================= */
+function renderQuiz() {
+  graded = false;
+  $("resultBox").classList.add("hidden");
+  const form = $("quizForm");
+  form.innerHTML = "";
+
+  quiz.forEach((q, i) => {
+    const isMC = q.type === "mc";
+    const card = document.createElement("div");
+    card.className = "q-card border rounded-xl p-4 transition";
+    card.dataset.idx = i;
+
+    const choices = isMC
+      ? q.options.map((opt, j) => `
+          <label class="choice block cursor-pointer">
+            <input type="radio" name="q${i}" value="${j}" class="hidden">
+            <span class="block border rounded-lg px-3 py-2 text-sm hover:bg-slate-50">${"①②③④"[j]} ${esc(opt)}</span>
+          </label>`).join("")
+      : ["true", "false"].map(v => `
+          <label class="choice cursor-pointer flex-1">
+            <input type="radio" name="q${i}" value="${v}" class="hidden">
+            <span class="block text-center border rounded-lg py-3 text-2xl font-bold hover:bg-slate-50">${v === "true" ? "O" : "X"}</span>
+          </label>`).join("");
+
+    card.innerHTML = `
+      <div class="flex items-start gap-2 mb-3">
+        <span class="shrink-0 text-xs font-bold px-2 py-1 rounded ${isMC ? "bg-indigo-100 text-indigo-700" : "bg-amber-100 text-amber-700"}">${isMC ? "객관식" : "OX"}</span>
+        <p class="font-semibold">Q${i + 1}. ${esc(q.question)}</p>
+      </div>
+      <div class="${isMC ? "grid gap-2" : "flex gap-3"}">${choices}</div>
+      <div class="feedback hidden mt-3 text-sm rounded-lg p-3"></div>`;
+    form.appendChild(card);
+  });
+  setView("quiz");
+}
+
+/* =========================================================
+   7. 채점
+   ========================================================= */
+function grade() {
+  let correct = 0, unanswered = 0;
+
+  quiz.forEach((q, i) => {
+    const picked = document.querySelector(`input[name="q${i}"]:checked`);
+    const card = document.querySelector(`.q-card[data-idx="${i}"]`);
+    const fb = card.querySelector(".feedback");
+    let userAns = null, ok = false;
+
+    if (picked) {
+      userAns = q.type === "mc" ? Number(picked.value) : picked.value === "true";
+      ok = userAns === q.answer;
+    } else unanswered++;
+    if (ok) correct++;
+
+    const answerText = q.type === "mc" ? `${"①②③④"[q.answer]} ${q.options[q.answer]}` : (q.answer ? "O" : "X");
+    card.className = `q-card border-2 rounded-xl p-4 ${ok ? "border-emerald-400 bg-emerald-50/40" : "border-rose-400 bg-rose-50/40"}`;
+    card.dataset.ok = ok;
+    fb.className = `feedback mt-3 text-sm rounded-lg p-3 ${ok ? "bg-emerald-100 text-emerald-900" : "bg-rose-100 text-rose-900"}`;
+    fb.innerHTML = `<b>${ok ? "⭕ 정답!" : picked ? "❌ 오답" : "⚠️ 미응답"}</b> · 정답: <b>${esc(answerText)}</b><br><span class="text-slate-700">💡 ${esc(q.explanation || "")}</span>`;
+    card.querySelectorAll("input").forEach(inp => inp.disabled = true);
+  });
+
+  const total = quiz.length;
+  const pct = Math.round(correct / total * 100);
+  $("scorePct").textContent = pct;
+  $("scoreRing").setAttribute("stroke-dasharray", `${pct} 100`);
+  $("scoreRing").setAttribute("stroke", pct >= 80 ? "#10b981" : pct >= 50 ? "#f59e0b" : "#f43f5e");
+  $("scoreTitle").textContent = pct >= 80 ? "🎉 훌륭해요!" : pct >= 50 ? "👍 조금만 더!" : "📚 복습이 필요해요";
+  $("scoreDetail").textContent = `${total}문항 중 ${correct}개 정답 · 오답 ${total - correct - unanswered}개 · 미응답 ${unanswered}개`;
+  $("resultBox").classList.remove("hidden");
+  $("submitBtn").classList.add("hidden");
+  graded = true;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* =========================================================
+   8. 파일 업로드 → 텍스트 추출
+   ========================================================= */
+function toBase64(buf) {
+  let bin = ""; const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function readFile(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  const item = { id: Date.now() + Math.random(), name: file.name, size: file.size, ext, text: "", base64: null, status: "loading", note: "" };
+  files.push(item);
+  renderFiles();
+  try {
+    if (ext === "txt" || ext === "md") {
+      item.text = await file.text();
+    } else if (ext === "pdf") {
+      const buf = await file.arrayBuffer();
+      if (file.size < 30 * 1024 * 1024) item.base64 = toBase64(buf);     // Claude 원본 전송용
+      if (window.pdfjsLib) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        try {
+          const pdf = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+          for (let p = 1; p <= pdf.numPages; p++) {
+            const content = await (await pdf.getPage(p)).getTextContent();
+            item.text += content.items.map(it => it.str).join(" ") + "\n";
+          }
+        } catch (_) { /* 텍스트 추출 실패해도 Claude에는 원본 PDF로 전달 가능 */ }
+      }
+      if (!item.text.trim() && !item.base64) throw new Error("PDF에서 글자를 읽지 못했습니다.");
+      if (!item.text.trim()) item.note = "스캔본 추정 · Claude로만 분석 가능";
+    } else if (ext === "docx") {
+      if (!window.mammoth) throw new Error("DOCX 라이브러리를 불러오지 못했습니다(인터넷 연결 확인).");
+      item.text = (await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value;
+    } else if (ext === "pptx") {
+      item.text = await extractPptx(file);
+      if (!item.text.trim()) throw new Error("슬라이드에서 글자를 찾지 못했습니다 (이미지로만 된 슬라이드일 수 있어요 → PDF로 저장 후 첨부)");
+    } else if (ext === "hwpx") {
+      item.text = await extractZipXml(file, /^Contents\/section\d+\.xml$/, /<hp:t[^>]*>([\s\S]*?)<\/hp:t>/g);
+    } else if (ext === "hwp" || ext === "ppt" || ext === "doc") {
+      throw new Error(`구형 .${ext} 형식은 읽을 수 없어요 → 'PDF로 저장' 후 첨부해 주세요`);
+    } else throw new Error("지원하지 않는 형식입니다 (.pptx .pdf .docx .hwpx .txt .md)");
+    item.text = item.text.trim();
+    item.status = "ok";
+  } catch (e) {
+    item.status = "error";
+    item.note = e.message;
+  }
+  renderFiles();
+}
+
+/* ---- PPTX: 압축을 풀어 슬라이드 XML의 <a:t> 텍스트 + 발표자 노트를 모음 ---- */
+function decodeXml(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+function xmlText(xml, re) {
+  // 문단(</a:p>, </hp:p>)마다 줄바꿈, 텍스트 조각만 추출
+  return xml.split(/<\/(?:a|hp):p>/).map(par => [...par.matchAll(re)].map(m => decodeXml(m[1])).join(""))
+            .filter(t => t.trim()).join("\n");
+}
+async function loadZip(file) {
+  if (!window.JSZip) throw new Error("압축 해제 라이브러리를 불러오지 못했습니다(인터넷 연결 확인).");
+  return JSZip.loadAsync(await file.arrayBuffer());
+}
+async function extractPptx(file) {
+  const zip = await loadZip(file);
+  const num = (n) => Number(n.match(/(\d+)\.xml$/)[1]);
+  const slides = Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a, b) => num(a) - num(b));
+  const out = [];
+  for (const s of slides) {
+    const n = num(s);
+    let t = xmlText(await zip.file(s).async("string"), /<a:t>([\s\S]*?)<\/a:t>/g);
+    const noteFile = zip.file(`ppt/notesSlides/notesSlide${n}.xml`);
+    if (noteFile) {
+      const note = xmlText(await noteFile.async("string"), /<a:t>([\s\S]*?)<\/a:t>/g).replace(/^\d+$/m, "").trim();
+      if (note) t += `\n(발표자 노트) ${note}`;
+    }
+    if (t.trim()) out.push(`[슬라이드 ${n}]\n${t}`);
+  }
+  return out.join("\n\n");
+}
+/* ---- HWPX(한글 새 형식) ---- */
+async function extractZipXml(file, nameRe, textRe) {
+  const zip = await loadZip(file);
+  const names = Object.keys(zip.files).filter(n => nameRe.test(n)).sort();
+  const parts = [];
+  for (const n of names) parts.push(xmlText(await zip.file(n).async("string"), textRe));
+  return parts.join("\n");
+}
+
+/* 첨부 파일 목록(파일명 칩) 그리기 */
+function renderFiles() {
+  const icon = { pdf: "📕", docx: "📘", pptx: "📙", hwpx: "📗", txt: "📄", md: "📝" };
+  const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.max(1, Math.round(n / 1024)) + "KB";
+  $("fileList").innerHTML = files.map(f => {
+    const color = f.status === "error" ? "border-rose-200 bg-rose-50" : f.status === "loading" ? "border-slate-200 bg-slate-50" : "border-indigo-200 bg-indigo-50";
+    const sub = f.status === "loading" ? "⏳ 읽는 중..."
+      : f.status === "error" ? `⚠️ ${esc(f.note)}`
+      : `${kb(f.size)} · ${f.text.length.toLocaleString()}자 추출${f.note ? " · " + esc(f.note) : ""}`;
+    return `
+      <div class="flex items-center gap-3 border ${color} rounded-lg px-3 py-2">
+        <span class="text-xl">${icon[f.ext] || "📎"}</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-semibold truncate" title="${esc(f.name)}">${esc(f.name)}</p>
+          <p class="text-xs text-slate-500">${sub}</p>
+        </div>
+        <button type="button" data-remove="${f.id}" class="text-slate-400 hover:text-rose-500 text-lg leading-none" title="첨부 삭제">✕</button>
+      </div>`;
+  }).join("");
+  $("fileList").querySelectorAll("[data-remove]").forEach(b => b.onclick = () => {
+    files = files.filter(f => String(f.id) !== b.dataset.remove);
+    renderFiles();
+  });
+}
+
+/* =========================================================
+   9. 유틸 & 이벤트 연결
+   ========================================================= */
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+function showError(m) { $("errorMsg").textContent = m; $("errorMsg").classList.remove("hidden"); }
+function hideError() { $("errorMsg").classList.add("hidden"); }
+function updateCount() { $("charCount").textContent = $("lectureText").value.length.toLocaleString() + "자"; }
+
+function setView(v) {
+  $("emptyState").classList.toggle("hidden", v !== "empty");
+  $("loading").classList.toggle("hidden", v !== "loading");
+  $("quizForm").classList.toggle("hidden", v !== "quiz");
+  $("submitBtn").classList.toggle("hidden", v !== "quiz");
+  $("generateBtn").disabled = v === "loading";
+  $("generateBtn").classList.toggle("opacity-60", v === "loading");
+}
+
+function setLevel(l) {
+  level = l;
+  document.querySelectorAll(".level-btn").forEach(b => {
+    const on = b.dataset.level === l;
+    b.className = `level-btn py-2 rounded-lg border text-sm transition ${on ? "bg-indigo-600 text-white border-indigo-600 font-semibold" : "hover:bg-slate-50"}`;
+  });
+}
+
+function updateMode() {
+  const has = $("apiKey").value.trim().length > 0;
+  $("modeBadge").textContent = has ? "AI 모드 (API 연결)" : "샘플 모드 (API 키 없음)";
+  $("modeBadge").className = `px-3 py-1 rounded-full text-xs font-semibold ${has ? "bg-emerald-300 text-emerald-900" : "bg-amber-300 text-amber-900"}`;
+}
+
+document.querySelectorAll(".level-btn").forEach(b => b.onclick = () => setLevel(b.dataset.level));
+$("generateBtn").onclick = generate;
+$("submitBtn").onclick = (e) => { e.preventDefault(); grade(); };
+$("retryBtn").onclick = renderQuiz;
+$("wrongOnlyBtn").onclick = () => {
+  const show = $("wrongOnlyBtn").dataset.on !== "1";
+  $("wrongOnlyBtn").dataset.on = show ? "1" : "0";
+  $("wrongOnlyBtn").textContent = show ? "📋 전체 문제 보기" : "❗ 틀린 문제만 보기";
+  document.querySelectorAll(".q-card").forEach(c => c.classList.toggle("hidden", show && c.dataset.ok === "true"));
+};
+$("loadExample").onclick = () => { $("lectureText").value = EXAMPLE_NOTE; updateCount(); };
+$("lectureText").oninput = updateCount;
+$("apiKey").oninput = updateMode;
+$("toggleKey").onclick = () => {
+  const k = $("apiKey"); k.type = k.type === "password" ? "text" : "password";
+  $("toggleKey").textContent = k.type === "password" ? "보기" : "숨김";
+};
+$("provider").onchange = () => { $("model").value = $("provider").value === "anthropic" ? "claude-sonnet-4-5" : "gpt-4o-mini"; };
+$("fileInput").onchange = (e) => { [...e.target.files].forEach(readFile); e.target.value = ""; };
+
+const dz = $("dropZone");
+dz.ondragover = (e) => { e.preventDefault(); dz.classList.add("bg-indigo-50"); };
+dz.ondragleave = () => dz.classList.remove("bg-indigo-50");
+dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove("bg-indigo-50"); [...e.dataTransfer.files].forEach(readFile); };
+
+setLevel("보통");
+</script>
+</body>
+</html>
